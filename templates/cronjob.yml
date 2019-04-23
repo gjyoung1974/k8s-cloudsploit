@@ -1,0 +1,62 @@
+{{- $namespace := .Values.namespace }}
+{{- $iamrole := .Values.iamrole }}
+{{- $skip_regions := .Values.skip_regions }}
+
+{{- range $job := .Values.jobs }}
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: "scan-cloudsploit-{{ $job.profile }}"
+  namespace: {{ $namespace }}
+spec:
+  schedule: {{ $job.schedule | quote }}
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          annotations:
+            iam.amazonaws.com/role: {{ $iamrole }}
+        spec:
+          containers:
+          - name: "scan-cloudsploit-{{ $job.profile }}"
+            image: quay.io/ACMEsecurity/cloudsploit:0.4
+            imagePullPolicy: IfNotPresent
+            env:
+            - name: ROLLBAR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  key: rollbar-token
+                  name: ACME-security-rollbar
+            - name: skip_regions
+              value: "{{range $i,$e := $skip_regions }}{{if $i}} {{end}}{{$e}}{{end}}"
+            command: [{{ "/bin/sh" | quote }}, {{ "-c" | quote }}]
+            args: [{{ default "/home/cloudsploit/generate.sh" $job.args | quote }}]
+            volumeMounts:
+            - mountPath: /home/cloudsploit/.aws/config
+              name: tls-config-volume
+              subPath: config
+            - mountPath: /home/cloudsploit/generate.sh
+              name: aws-s3-push-script
+              subPath: push.sh
+          volumes:
+          - configMap:
+              defaultMode: 420
+              items:
+              - key: aws-profile-config
+                path: config
+              name: aws-cli-tools-config-{{ $job.profile }}
+            name: tls-config-volume
+          - configMap:
+              defaultMode: 0777
+              items:
+              - key: aws-s3-push-script
+                path: push.sh
+              name: aws-cli-tools-config-{{ $job.profile }}
+            name: aws-s3-push-script
+          imagePullSecrets:
+            - name: ACMEsecurity-buildzit-pull-secret
+          restartPolicy: OnFailure
+{{- end }}

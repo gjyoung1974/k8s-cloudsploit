@@ -1,0 +1,7 @@
+name: k8s-cloudsploit
+version: 1.0.3
+appVersion: 1.0.0
+description: CloudSploit is a security and configuration scanner that can detect hundreds of threats in your AWS account. 
+sources:
+- https://github.com/cloudsploit/scans.git
+engine: gotpl

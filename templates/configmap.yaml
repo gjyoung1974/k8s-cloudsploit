@@ -1,0 +1,66 @@
+{{- $namespace := .Values.namespace }}
+{{- $profileForS3 := .Values.profileForS3 }}
+{{- $pod_role:= .Values.iamrole }}
+
+{{- range $job := .Values.jobs }}
+---
+# Configure our AWS CLI client for pushing to S3
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aws-cli-tools-config-{{ $job.profile }}
+  namespace: "{{ $namespace }}"
+data:
+  aws-profile-config: |
+      [default]
+      region = {{ $job.region }}
+
+      [profile {{ $profileForS3.name }}]
+      region = {{ $profileForS3.region }}
+      source_profile = main
+  aws-s3-push-script: |
+      #!/usr/bin/env bash
+      now=$(date +"%m_%d_%Y")
+      cloudsploit=/usr/lib/node_modules/cloudsploit
+      Report_Url=https://s3.console.aws.amazon.com/s3/buckets/{{ $profileForS3.bucketName }}/{{ $job.profile }}/${now}/
+      ROLLBAR_TOKEN=${ROLLBAR_TOKEN:-""}
+
+      sudo chown -fR cloudsploit:users /home/cloudsploit && exit 0
+      
+      echo "[default]
+      role_arn = {{ $job.roleArm }}
+      credential_source = Ec2InstanceMetadata
+
+      [main]
+      role_arn = {{ $pod_role }}
+      source_profile = default
+      " > ~/.aws/credentials;
+      
+      echo -e "OK
+      UNKNOWN
+      WARN
+      INFO" > exclude-words.txt
+
+      aws-profile -p default node $cloudsploit |grep -Fivw -f exclude-words.txt |tee -a output.txt
+      rows=`cat output.txt | wc -l`
+      echo -e "The report about {{ $job.profile }}\n$(cat output.txt)" > output.txt
+
+      function report_rollbar() {
+      if [[ ! -z "$ROLLBAR_TOKEN" ]]; then
+          echo "Sending rollbar notification"
+        
+          level="warning"
+          title="CloudSploit has found $rows potentially FAIL issues in {{ $job.profile }}"
+          body="Recent report about {{ $job.profile }} here: ${Report_Url}"
+        
+          echo "{\"data\": {\"environment\": \"{{ $job.profile }}\", \"level\": \"$level\", \"title\": \"$title\", \"body\": {\"message\": {\"body\": \"$body\"}}, \"fingerprint\": \"{{ $job.profile }}$rows\"}, \"access_token\": \"$ROLLBAR_TOKEN\"}" > rollbar.json
+          curl -H "Content-Type: application/json" --data-binary "@rollbar.json" https://api.rollbar.com/api/1/item/
+      fi
+      }
+
+      echo Report about {{ $job.profile }} can be retrieved by: ${Report_Url}
+      aws --profile={{ $profileForS3.name }} s3 cp ~/ s3://{{ $profileForS3.bucketName }}/{{ $job.profile }}/${now} --recursive --exclude "*" --include "*.txt"
+
+      report_rollbar
+---
+{{- end }}
